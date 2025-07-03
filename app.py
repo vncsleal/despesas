@@ -131,7 +131,18 @@ def display_metrics(df):
     ]
 
     with col1:
-        total_expenditure = monthly_df["valor"].sum()
+        # Calculate total expenditure considering shared expenses
+        user_expenses = monthly_df[monthly_df["usuario"] == st.session_state["username"]]
+        shared_expenses = monthly_df[monthly_df["compartilhado"] == True]
+        
+        # For user's own expenses, count full amount
+        user_total = user_expenses[user_expenses["compartilhado"] == False]["valor"].sum()
+        
+        # For shared expenses, count user's portion (split among all users)
+        total_users = len(st.secrets["passwords"]) if len(st.secrets["passwords"]) > 0 else 1
+        shared_total = shared_expenses["valor"].sum() / total_users
+        
+        total_expenditure = user_total + shared_total
         st.markdown("<p style='margin-bottom: 0.2rem;'><strong>Gasto Mensal Atual</strong></p>", unsafe_allow_html=True)
         st.markdown(f"<h2 style='color: white; margin-top: 0;'>R$ {total_expenditure:,.2f}</h2>", unsafe_allow_html=True)
 
@@ -166,10 +177,21 @@ def display_metrics(df):
 def display_charts(df):
     st.header("Visualizações")
 
+    # Apply shared expense logic for charts
+    total_users = len(st.secrets["passwords"]) if len(st.secrets["passwords"]) > 0 else 1
+    
+    # Create adjusted dataframe with split shared expenses
+    df_adjusted = df.copy()
+    # For shared expenses, divide the value by number of users
+    df_adjusted.loc[df_adjusted["compartilhado"] == True, "valor"] = df_adjusted.loc[df_adjusted["compartilhado"] == True, "valor"] / total_users
+    
+    # Filter for current user's expenses (including their share of shared expenses)
+    user_df_adjusted = df_adjusted[(df_adjusted["usuario"] == st.session_state["username"]) | (df_adjusted["compartilhado"] == True)]
+
     # --- Expenses by Month (Bar Chart) ---
-    df["mes_ano"] = df["data"].dt.to_period("M").astype(str)
+    user_df_adjusted["mes_ano"] = user_df_adjusted["data"].dt.to_period("M").astype(str)
     expenses_by_month = (
-        df.groupby("mes_ano")["valor"].sum().reset_index()
+        user_df_adjusted.groupby("mes_ano")["valor"].sum().reset_index()
     )
     fig_bar = px.bar(
         expenses_by_month,
@@ -186,12 +208,12 @@ def display_charts(df):
     with col1:
         current_month = datetime.now().month
         current_year = datetime.now().year
-        monthly_df = df[
-            (df["data"].dt.month == current_month) & (df["data"].dt.year == current_year)
+        monthly_df_adjusted = user_df_adjusted[
+            (user_df_adjusted["data"].dt.month == current_month) & (user_df_adjusted["data"].dt.year == current_year)
         ]
-        if not monthly_df.empty:
+        if not monthly_df_adjusted.empty:
             fig_pie_monthly = px.pie(
-                monthly_df,
+                monthly_df_adjusted,
                 names="tag",
                 values="valor",
                 title="Gastos do Mês Atual por Tag",
@@ -199,9 +221,9 @@ def display_charts(df):
             st.plotly_chart(fig_pie_monthly, use_container_width=True)
 
     with col2:
-        if not df.empty:
+        if not user_df_adjusted.empty:
             fig_pie_total = px.pie(
-                df,
+                user_df_adjusted,
                 names="tag",
                 values="valor",
                 title="Total de Gastos por Tag",
