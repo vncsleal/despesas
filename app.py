@@ -263,7 +263,7 @@ def display_shared_expenses(df):
 
 def display_data_editor(df):
     st.header("Todas as Suas Despesas")
-    st.dataframe(df, use_container_width=True)
+    st.data_editor(df, use_container_width=True, num_rows="dynamic")
 
 # --- Main App ---
 def main():
