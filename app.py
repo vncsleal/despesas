@@ -121,7 +121,7 @@ def display_sidebar(df):
 
 def display_metrics(df):
     st.header("Dashboard")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     # --- Current Month Metrics ---
     current_month = datetime.now().month
@@ -132,10 +132,8 @@ def display_metrics(df):
 
     with col1:
         total_expenditure = monthly_df["valor"].sum()
-        st.metric(
-            "Gasto Mensal Atual",
-            f"R$ {total_expenditure:,.2f}",
-        )
+        st.markdown("<p style='margin-bottom: 0.2rem;'><strong>Gasto Mensal Atual</strong></p>", unsafe_allow_html=True)
+        st.markdown(f"<h2 style='color: white; margin-top: 0;'>R$ {total_expenditure:,.2f}</h2>", unsafe_allow_html=True)
 
     # --- Budget Metrics ---
     budgets = load_budget()
@@ -144,8 +142,18 @@ def display_metrics(df):
     with col2:
         remaining_budget = user_budget - total_expenditure
         color = "green" if remaining_budget >= 0 else "red"
-        st.markdown(f"<p style='font-size: 14px; color: grey;'>Orçamento Restante</p>", unsafe_allow_html=True)
-        st.markdown(f"<p style='font-size: 36px; font-weight: bold; color:{color};'>R$ {remaining_budget:,.2f}</p>", unsafe_allow_html=True)
+        st.markdown("<p style='margin-bottom: 0.2rem;'><strong>Orçamento Restante</strong></p>", unsafe_allow_html=True)
+        st.markdown(f"<h2 style='color: {color}; margin-top: 0;'>R$ {remaining_budget:,.2f}</h2>", unsafe_allow_html=True)
+
+    with col3:
+        if not monthly_df.empty:
+            current_day = datetime.now().day
+            average_daily_expense = total_expenditure / current_day
+            st.markdown("<p style='margin-bottom: 0.2rem;'><strong>Média Diária</strong></p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='color: white; margin-top: 0;'>R$ {average_daily_expense:,.2f}</h2>", unsafe_allow_html=True)
+        else:
+            st.markdown("<p style='margin-bottom: 0.2rem;'><strong>Média Diária</strong></p>", unsafe_allow_html=True)
+            st.markdown(f"<h2 style='color: white; margin-top: 0;'>R$ 0,00</h2>", unsafe_allow_html=True)
     
     st.header("Definir Orçamento")
     new_budget = st.number_input("Definir Orçamento Mensal", min_value=0.0, value=user_budget, format="%.2f")
