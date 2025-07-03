@@ -3,3 +3,5 @@ openpyxl
 streamlit
 plotly
 bcrypt
+psycopg2-binary
+sqlalchemy

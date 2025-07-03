@@ -6,9 +6,15 @@ from datetime import datetime
 import bcrypt
 import json
 import os
+import io
+import psycopg2
+from sqlalchemy import text
 
 # --- Constants ---
 BUDGET_FILE = "budget.json"
+
+# --- Database Connection ---
+conn = st.connection("neon_db", type="sql")
 
 # --- Budget Functions ---
 def load_budget():
@@ -66,27 +72,41 @@ def check_password():
 
 
 # --- Data Functions ---
-def load_data(file_path):
-    try:
-        # Use openpyxl to handle empty files gracefully
-        df = pd.read_excel(file_path, engine='openpyxl')
-    except FileNotFoundError:
-        df = pd.DataFrame(
-            columns=["nome", "tag", "data", "valor", "compartilhado", "usuario"]
-        )
-
-    # If the dataframe is empty (new file or empty file), ensure columns are set
-    if df.empty:
-        df = pd.DataFrame(
-            columns=["nome", "tag", "data", "valor", "compartilhado", "usuario"]
-        )
-
+def load_data():
+    # Create table if it doesn't exist
+    with conn.session as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id SERIAL PRIMARY KEY,
+                nome TEXT,
+                tag TEXT,
+                data DATE,
+                valor REAL,
+                compartilhado BOOLEAN,
+                usuario TEXT
+            )
+        """))
+        session.commit()
+    df = conn.query("SELECT * FROM expenses", ttl=0)
     df["data"] = pd.to_datetime(df["data"])
-    
     return df
 
-def save_data(file_path, df):
-    df.to_excel(file_path, index=False)
+def save_data(df):
+    with conn.session as session:
+        # Clear existing data
+        session.execute(text("DELETE FROM expenses"))
+
+        # Insert new data
+        data_to_insert = df.to_dict(orient='records')
+        for row in data_to_insert:
+            session.execute(text("""
+                INSERT INTO expenses (nome, tag, data, valor, compartilhado, usuario)
+                VALUES (:nome, :tag, :data, :valor, :compartilhado, :usuario)
+            """
+            ), params=row
+            )
+        session.commit()
+    st.success("Dados salvos no banco de dados!")
 
 # --- UI Components ---
 def display_header():
@@ -324,12 +344,22 @@ def display_data_editor(df, current_username):
         st.success(f"{len(deleted_rows_indices)} despesa(s) deletada(s) com sucesso!")
         st.session_state["data_modified"] = True
 
+    # Add a download button for the data
+    excel_buffer = io.BytesIO()
+    df.to_excel(excel_buffer, index=False)
+    excel_buffer.seek(0) # Rewind the buffer to the beginning
+    st.download_button(
+        label="Download Despesas (Excel)",
+        data=excel_buffer.getvalue(),
+        file_name="despesas_backup.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
     return df # Return the modified DataFrame
 
 # --- Main App ---
 def main():
-    file_path = "despesas.xlsx"
-    df = load_data(file_path)
+    df = load_data()
 
     if "data_modified" not in st.session_state:
         st.session_state["data_modified"] = False
@@ -350,7 +380,7 @@ def main():
     df = display_data_editor(df, st.session_state["username"])
 
     # Save the updated DataFrame (after edits and deletions) to the Excel file
-    save_data(file_path, df)
+    save_data(df)
 
     # Conditionally rerun if data was modified
     if st.session_state["data_modified"]:
