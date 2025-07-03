@@ -89,24 +89,84 @@ def load_data():
         session.commit()
     df = conn.query("SELECT * FROM expenses", ttl=0)
     df["data"] = pd.to_datetime(df["data"])
+    # Don't set id as index, keep it as a regular column
     return df
 
-def save_data(df):
+def save_data():
+    if "expense_data_editor" not in st.session_state:
+        st.warning("Nenhuma alteração detectada.")
+        return
+        
     with conn.session as session:
-        # Clear existing data
-        session.execute(text("DELETE FROM expenses"))
+        edited_rows = st.session_state.expense_data_editor.get('edited_rows', {})
+        added_rows = st.session_state.expense_data_editor.get('added_rows', [])
+        deleted_rows = st.session_state.expense_data_editor.get('deleted_rows', [])
 
-        # Insert new data
-        data_to_insert = df.to_dict(orient='records')
-        for row in data_to_insert:
-            session.execute(text("""
-                INSERT INTO expenses (nome, tag, data, valor, compartilhado, usuario)
-                VALUES (:nome, :tag, :data, :valor, :compartilhado, :usuario)
-            """
-            ), params=row
-            )
+        print(f"DEBUG (Console): Edited Rows: {edited_rows}")
+        print(f"DEBUG (Console): Added Rows: {added_rows}")
+        print(f"DEBUG (Console): Deleted Rows: {deleted_rows}")
+
+        # Handle deletions
+        if deleted_rows:
+            for row_index in deleted_rows:
+                # Get the actual ID from the original dataframe using the row index
+                df = load_data()
+                if row_index < len(df):
+                    row_id = int(df.iloc[row_index]['id'])  # Convert to Python int
+                    session.execute(text("DELETE FROM expenses WHERE id = :id"), {"id": row_id})
+            st.success(f"{len(deleted_rows)} despesa(s) deletada(s) com sucesso!")
+
+        # Handle additions
+        if added_rows:
+            for row_data in added_rows:
+                # Ensure 'usuario' is set for new rows
+                if 'usuario' not in row_data or not row_data['usuario']:
+                    row_data['usuario'] = st.session_state["username"]
+                
+                # Remove 'id' from row_data for new insertions, as it's SERIAL PRIMARY KEY
+                if 'id' in row_data:
+                    del row_data['id']
+
+                # Convert pandas/numpy types to Python types
+                clean_row_data = {}
+                for key, value in row_data.items():
+                    if hasattr(value, 'item'):  # numpy types have .item() method
+                        clean_row_data[key] = value.item()
+                    else:
+                        clean_row_data[key] = value
+
+                session.execute(text("""
+                    INSERT INTO expenses (nome, tag, data, valor, compartilhado, usuario)
+                    VALUES (:nome, :tag, :data, :valor, :compartilhado, :usuario)
+                """), clean_row_data)
+            st.success(f"{len(added_rows)} despesa(s) adicionada(s) com sucesso!")
+
+        # Handle edits
+        if edited_rows:
+            df = load_data()
+            for row_index, changes in edited_rows.items():
+                # Get the actual ID from the original dataframe using the row index
+                if int(row_index) < len(df):
+                    row_id = int(df.iloc[int(row_index)]['id'])  # Convert to Python int
+                    
+                    # Construct the UPDATE query dynamically
+                    set_clauses = []
+                    params = {"id": row_id}
+                    for col_name, new_value in changes.items():
+                        if col_name != 'id':  # Don't update the ID column
+                            set_clauses.append(f"{col_name} = :{col_name}")
+                            # Convert pandas/numpy types to Python types
+                            if hasattr(new_value, 'item'):  # numpy types have .item() method
+                                params[col_name] = new_value.item()
+                            else:
+                                params[col_name] = new_value
+                    
+                    if set_clauses: # Only execute if there are changes
+                        query = text(f"UPDATE expenses SET {', '.join(set_clauses)} WHERE id = :id")
+                        session.execute(query, params)
+            st.success(f"{len(edited_rows)} despesa(s) editada(s) com sucesso!")
+
         session.commit()
-    st.success("Dados salvos no banco de dados!")
 
 # --- UI Components ---
 def display_header():
@@ -126,17 +186,22 @@ def display_sidebar(df):
 
     if st.sidebar.button("Adicionar Despesa"):
         if nome and valor > 0:
-            new_expense = pd.DataFrame(
-                {
-                    "nome": [nome],
-                    "tag": [tag],
-                    "data": [data],
-                    "valor": [valor],
-                    "compartilhado": [compartilhado],
-                    "usuario": [st.session_state["username"]],
-                }
-            )
-            return pd.concat([df, new_expense], ignore_index=True)
+            # Add expense directly to database
+            with conn.session as session:
+                session.execute(text("""
+                    INSERT INTO expenses (nome, tag, data, valor, compartilhado, usuario)
+                    VALUES (:nome, :tag, :data, :valor, :compartilhado, :usuario)
+                """), {
+                    "nome": nome,
+                    "tag": tag,
+                    "data": data,
+                    "valor": valor,
+                    "compartilhado": compartilhado,
+                    "usuario": st.session_state["username"]
+                })
+                session.commit()
+            st.sidebar.success("Despesa adicionada!")
+            st.rerun()
     return df
 
 def display_metrics(df):
@@ -281,88 +346,43 @@ def display_shared_expenses(df):
     st.dataframe(shared_df, use_container_width=True)
 
 
-def display_data_editor(df, current_username):
+def display_data_editor(df):
     st.header("Todas as Suas Despesas")
-
-    # Configure columns for editing
+    
+    # Configure column settings to make ID read-only
     column_config = {
-        "usuario": st.column_config.TextColumn(
-            "Usuário",
-            disabled=True, # Make username column read-only
-        ),
-        "compartilhado": st.column_config.CheckboxColumn(
-            "Compartilhada",
-            help="Esta despesa é compartilhada?",
+        "id": st.column_config.NumberColumn(
+            "ID",
+            disabled=True,  # Make ID column read-only
         ),
         "data": st.column_config.DateColumn(
             "Data",
             format="DD/MM/YYYY",
-            step=1,
         ),
         "valor": st.column_config.NumberColumn(
             "Valor",
             format="%.2f",
         ),
+        "compartilhado": st.column_config.CheckboxColumn(
+            "Compartilhada",
+        ),
     }
-
-    # Display the data editor
+    
+    # Display the data editor and capture changes
     edited_df = st.data_editor(
-        df, # Pass the original df
-        column_config=column_config,
-        hide_index=False,
-        num_rows="dynamic", # Allows adding/deleting rows
+        df,
         use_container_width=True,
+        num_rows="dynamic",
         key="expense_data_editor",
+        column_config=column_config,
+        hide_index=True,
     )
-
-    # Get changes from the data editor
-    # st.session_state.expense_data_editor contains the changes
-    # 'edited_rows' is a dict of {row_index: {column_name: new_value}}
-    # 'added_rows' is a list of dicts, each dict is a new row
-    # 'deleted_rows' is a list of row indices that were deleted
-
-    # Apply edits to existing rows
-    if st.session_state.expense_data_editor.get('edited_rows'):
-        for row_idx, changes in st.session_state.expense_data_editor['edited_rows'].items():
-            for col_name, new_value in changes.items():
-                df.loc[row_idx, col_name] = new_value
-        st.session_state["data_modified"] = True
-
-    # Apply additions
-    if st.session_state.expense_data_editor.get('added_rows'):
-        for new_row_data in st.session_state.expense_data_editor['added_rows']:
-            # Ensure 'usuario' is set for new rows
-            if 'usuario' not in new_row_data or not new_row_data['usuario']:
-                new_row_data['usuario'] = current_username
-            df = pd.concat([df, pd.DataFrame([new_row_data])], ignore_index=True)
-        st.session_state["data_modified"] = True
-
-    # Apply deletions
-    deleted_rows_indices = st.session_state.expense_data_editor.get('deleted_rows', [])
-    if deleted_rows_indices:
-        df = df.drop(deleted_rows_indices).reset_index(drop=True)
-        st.success(f"{len(deleted_rows_indices)} despesa(s) deletada(s) com sucesso!")
-        st.session_state["data_modified"] = True
-
-    # Add a download button for the data
-    excel_buffer = io.BytesIO()
-    df.to_excel(excel_buffer, index=False)
-    excel_buffer.seek(0) # Rewind the buffer to the beginning
-    st.download_button(
-        label="Download Despesas (Excel)",
-        data=excel_buffer.getvalue(),
-        file_name="despesas_backup.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-    return df # Return the modified DataFrame
+    
+    return edited_df
 
 # --- Main App ---
 def main():
     df = load_data()
-
-    if "data_modified" not in st.session_state:
-        st.session_state["data_modified"] = False
 
     display_header()
     df = display_sidebar(df)
@@ -377,14 +397,14 @@ def main():
     display_metrics(user_df)
     display_charts(user_df)
     display_shared_expenses(df)
-    df = display_data_editor(df, st.session_state["username"])
-
-    # Save the updated DataFrame (after edits and deletions) to the Excel file
-    save_data(df)
-
-    # Conditionally rerun if data was modified
-    if st.session_state["data_modified"]:
-        st.session_state["data_modified"] = False # Reset the flag
+    
+    # Display data editor
+    edited_user_df = display_data_editor(user_df)
+    
+    # Add save button for manual saves
+    if st.button("Salvar Alterações"):
+        save_data()
+        st.success("Dados salvos com sucesso!")
         st.rerun()
 
 if __name__ == "__main__":
