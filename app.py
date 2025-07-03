@@ -4,6 +4,22 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import bcrypt
+import json
+import os
+
+# --- Constants ---
+BUDGET_FILE = "budget.json"
+
+# --- Budget Functions ---
+def load_budget():
+    if os.path.exists(BUDGET_FILE):
+        with open(BUDGET_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_budget(budgets):
+    with open(BUDGET_FILE, "w") as f:
+        json.dump(budgets, f)
 
 # --- App Configuration ---
 st.set_page_config(
@@ -121,17 +137,23 @@ def display_metrics(df):
             f"R$ {total_expenditure:,.2f}",
         )
 
+    # --- Budget Metrics ---
+    budgets = load_budget()
+    user_budget = budgets.get(st.session_state["username"], 0.0)
+
     with col2:
-        if not monthly_df.empty:
-            average_daily_expense = monthly_df.groupby(monthly_df["data"].dt.date)[
-                "valor"
-            ].sum().mean()
-            st.metric(
-                "Média de Gastos Diários do Mês Atual",
-                f"R$ {average_daily_expense:,.2f}",
-            )
-        else:
-            st.metric("Média de Gastos Diários do Mês Atual", "R$ 0,00")
+        remaining_budget = user_budget - total_expenditure
+        color = "green" if remaining_budget >= 0 else "red"
+        st.markdown(f"<p style='font-size: 14px; color: grey;'>Orçamento Restante</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='font-size: 36px; font-weight: bold; color:{color};'>R$ {remaining_budget:,.2f}</p>", unsafe_allow_html=True)
+    
+    st.header("Definir Orçamento")
+    new_budget = st.number_input("Definir Orçamento Mensal", min_value=0.0, value=user_budget, format="%.2f")
+    if st.button("Salvar Orçamento"):
+        budgets[st.session_state["username"]] = new_budget
+        save_budget(budgets)
+        st.success(f"Orçamento mensal definido para R$ {new_budget:,.2f}")
+        st.rerun()
 
 def display_charts(df):
     st.header("Visualizações")
