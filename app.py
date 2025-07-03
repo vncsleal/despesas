@@ -9,6 +9,10 @@ import os
 import io
 import psycopg2
 from sqlalchemy import text
+import google.generativeai as genai
+
+# --- Gemini Configuration ---
+genai.configure(api_key=st.secrets["generative_ai"]["gemini_api_key"])
 
 # --- Constants ---
 BUDGET_FILE = "budget.json"
@@ -102,9 +106,7 @@ def save_data():
         added_rows = st.session_state.expense_data_editor.get('added_rows', [])
         deleted_rows = st.session_state.expense_data_editor.get('deleted_rows', [])
 
-        print(f"DEBUG (Console): Edited Rows: {edited_rows}")
-        print(f"DEBUG (Console): Added Rows: {added_rows}")
-        print(f"DEBUG (Console): Deleted Rows: {deleted_rows}")
+        
 
         # Handle deletions
         if deleted_rows:
@@ -380,6 +382,42 @@ def display_data_editor(df):
     
     return edited_df
 
+def display_llm_bot(df):
+    with st.sidebar:
+        st.header("Assistente Financeiro")
+        st.write("Pergunte ao seu assistente financeiro sobre seus gastos e receba conselhos.")
+
+        # Convert DataFrame to a string format suitable for the LLM
+        expenses_str = df.to_markdown(index=False)
+
+        current_date = datetime.now().strftime("%d de %B de %Y")
+        budgets = load_budget()
+        user_budget = budgets.get(st.session_state["username"], 0.0)
+
+        prompt_template = f"""
+        Você é um assistente financeiro experiente e com profundo conhecimento em contabilidade. Sua função é analisar os dados de despesas fornecidos, realizar cálculos precisos (como totais, médias e projeções), e oferecer conselhos financeiros sábios e acionáveis. A data atual é {current_date}. O orçamento mensal definido para o usuário é de R$ {user_budget:,.2f}. Forneça suas respostas em texto simples, sem formatação especial ou Markdown.
+        Dados de despesas:
+        {expenses_str}
+
+        Com base nos dados acima, responda à seguinte pergunta:
+        """
+
+        user_question = st.text_area("Sua pergunta:", "Quais são minhas maiores despesas este mês?")
+
+        if st.button("Obter Conselho"):
+            if user_question:
+                full_prompt = prompt_template + user_question
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model.generate_content(full_prompt)
+                    st.markdown("---")
+                    st.subheader("Conselho do Assistente:")
+                    st.text(response.text)
+                except Exception as e:
+                    st.error(f"Ocorreu um erro ao se comunicar com o assistente: {e}")
+            else:
+                st.warning("Por favor, digite sua pergunta.")
+
 # --- Main App ---
 def main():
     df = load_data()
@@ -397,9 +435,12 @@ def main():
     display_metrics(user_df)
     display_charts(user_df)
     display_shared_expenses(df)
+    display_llm_bot(user_df)
     
     # Display data editor
     edited_user_df = display_data_editor(user_df)
+
+    
     
     # Add save button for manual saves
     if st.button("Salvar Alterações"):
