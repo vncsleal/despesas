@@ -261,14 +261,78 @@ def display_shared_expenses(df):
     st.dataframe(shared_df, use_container_width=True)
 
 
-def display_data_editor(df):
+def display_data_editor(df, current_username):
     st.header("Todas as Suas Despesas")
-    st.data_editor(df, use_container_width=True, num_rows="dynamic")
+
+    # Configure columns for editing
+    column_config = {
+        "usuario": st.column_config.TextColumn(
+            "Usuário",
+            disabled=True, # Make username column read-only
+        ),
+        "compartilhado": st.column_config.CheckboxColumn(
+            "Compartilhada",
+            help="Esta despesa é compartilhada?",
+        ),
+        "data": st.column_config.DateColumn(
+            "Data",
+            format="DD/MM/YYYY",
+            step=1,
+        ),
+        "valor": st.column_config.NumberColumn(
+            "Valor",
+            format="%.2f",
+        ),
+    }
+
+    # Display the data editor
+    edited_df = st.data_editor(
+        df, # Pass the original df
+        column_config=column_config,
+        hide_index=False,
+        num_rows="dynamic", # Allows adding/deleting rows
+        use_container_width=True,
+        key="expense_data_editor",
+    )
+
+    # Get changes from the data editor
+    # st.session_state.expense_data_editor contains the changes
+    # 'edited_rows' is a dict of {row_index: {column_name: new_value}}
+    # 'added_rows' is a list of dicts, each dict is a new row
+    # 'deleted_rows' is a list of row indices that were deleted
+
+    # Apply edits to existing rows
+    if st.session_state.expense_data_editor.get('edited_rows'):
+        for row_idx, changes in st.session_state.expense_data_editor['edited_rows'].items():
+            for col_name, new_value in changes.items():
+                df.loc[row_idx, col_name] = new_value
+        st.session_state["data_modified"] = True
+
+    # Apply additions
+    if st.session_state.expense_data_editor.get('added_rows'):
+        for new_row_data in st.session_state.expense_data_editor['added_rows']:
+            # Ensure 'usuario' is set for new rows
+            if 'usuario' not in new_row_data or not new_row_data['usuario']:
+                new_row_data['usuario'] = current_username
+            df = pd.concat([df, pd.DataFrame([new_row_data])], ignore_index=True)
+        st.session_state["data_modified"] = True
+
+    # Apply deletions
+    deleted_rows_indices = st.session_state.expense_data_editor.get('deleted_rows', [])
+    if deleted_rows_indices:
+        df = df.drop(deleted_rows_indices).reset_index(drop=True)
+        st.success(f"{len(deleted_rows_indices)} despesa(s) deletada(s) com sucesso!")
+        st.session_state["data_modified"] = True
+
+    return df # Return the modified DataFrame
 
 # --- Main App ---
 def main():
     file_path = "despesas.xlsx"
     df = load_data(file_path)
+
+    if "data_modified" not in st.session_state:
+        st.session_state["data_modified"] = False
 
     display_header()
     df = display_sidebar(df)
@@ -283,9 +347,15 @@ def main():
     display_metrics(user_df)
     display_charts(user_df)
     display_shared_expenses(df)
-    display_data_editor(user_df)
+    df = display_data_editor(df, st.session_state["username"])
 
+    # Save the updated DataFrame (after edits and deletions) to the Excel file
     save_data(file_path, df)
+
+    # Conditionally rerun if data was modified
+    if st.session_state["data_modified"]:
+        st.session_state["data_modified"] = False # Reset the flag
+        st.rerun()
 
 if __name__ == "__main__":
     if check_password():
